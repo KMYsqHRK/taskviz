@@ -11,12 +11,23 @@
   .\taskviz.ps1                        # serve on http://127.0.0.1:31415/
   .\taskviz.ps1 -Port 9000 -NoOpen
   .\taskviz.ps1 -Export snapshot.html  # write a self-contained snapshot instead of serving
+
+.PARAMETER DataFile
+  With -Export: render this JSON (same shape as /api/data) instead of reading the scheduler.
+  Used for the demo screenshots and tests.
+
+.PARAMETER BaselineFile
+  Where "mark everything as reviewed" stores task fingerprints. New or changed tasks are
+  reported against it.
 #>
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Read by the functions below')]
 param(
     [int]$Port = 31415,
     [switch]$NoOpen,
     [string]$Export,
-    [int]$HistoryDays = 3
+    [string]$DataFile,
+    [int]$HistoryDays = 3,
+    [string]$BaselineFile = (Join-Path $env:LOCALAPPDATA 'taskviz\baseline.json')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,6 +45,26 @@ function Get-Safe([scriptblock]$sb) { try { & $sb } catch { $null } }
 
 function ConvertTo-JsonText($obj) { (ConvertTo-Json $obj -Depth 6 -Compress).Replace('</', '<\/') }
 
+function Get-Fingerprint([string]$text) {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $hash = $sha.ComputeHash($utf8.GetBytes($text))
+    -join ($hash[0..7] | ForEach-Object { $_.ToString('x2') })
+}
+
+function Read-Baseline {
+    if (-not (Test-Path -LiteralPath $BaselineFile)) { return $null }
+    Get-Safe { [IO.File]::ReadAllText($BaselineFile, $utf8) | ConvertFrom-Json }
+}
+
+function Save-Baseline($data) {
+    $fingerprints = [ordered]@{}
+    foreach ($t in $data.tasks) { $fingerprints[$t.path] = $t.hash }
+    $dir = Split-Path -Parent $BaselineFile
+    if (-not (Test-Path -LiteralPath $dir)) { [void](New-Item -ItemType Directory -Path $dir) }
+    $json = ConvertTo-Json ([ordered]@{ savedAt = Format-Local (Get-Date); tasks = $fingerprints }) -Depth 4
+    [IO.File]::WriteAllText($BaselineFile, $json, $utf8)
+}
+
 # --- data --------------------------------------------------------------------
 
 function Get-TaskvizData {
@@ -46,6 +77,7 @@ function Get-TaskvizData {
             if ($null -eq $t) { continue }
             $result = Get-Safe { [int64]$t.LastTaskResult }
             if ($null -ne $result -and $result -lt 0) { $result += 4294967296 }
+            $xml = Get-Safe { $t.Xml }
             $tasks.Add([ordered]@{
                 path       = $t.Path
                 name       = $t.Name
@@ -56,7 +88,8 @@ function Get-TaskvizData {
                 lastResult = $result
                 nextRun    = Format-Local (Get-Safe { $t.NextRunTime })
                 missedRuns = Get-Safe { [int]$t.NumberOfMissedRuns }
-                xml        = Get-Safe { $t.Xml }
+                xml        = $xml
+                hash       = if ($xml) { Get-Fingerprint $xml } else { $null }
             })
         }
         foreach ($sub in @(Get-Safe { $folder.GetFolders(0) })) {
@@ -116,6 +149,7 @@ function Get-TaskvizData {
         user        = [Security.Principal.WindowsIdentity]::GetCurrent().Name
         userProfile = $env:USERPROFILE
         history     = $history
+        baseline    = Read-Baseline
         tasks       = $tasks
     }
 }
@@ -144,7 +178,9 @@ function Invoke-TaskAction([string]$action, [string]$path) {
 
 if ($Export) {
     $out = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Export)
-    $html = Get-PageHtml @{ mode = 'static' } (ConvertTo-JsonText (Get-TaskvizData))
+    $dataJson = if ($DataFile) { [IO.File]::ReadAllText((Resolve-Path -LiteralPath $DataFile), $utf8).Replace('</', '<\/') }
+                else { ConvertTo-JsonText (Get-TaskvizData) }
+    $html = Get-PageHtml @{ mode = 'static' } $dataJson
     [IO.File]::WriteAllText($out, $html, $utf8)
     Write-Host "snapshot -> $out"
     if (-not $NoOpen) { Start-Process $out }
@@ -245,6 +281,11 @@ function Invoke-Request($req) {
             } catch {
                 Send-Json $req 500 @{ error = $_.Exception.Message }
             }
+        }
+        'POST /api/baseline' {
+            Save-Baseline (Get-TaskvizData)
+            Write-Host ("{0:HH:mm:ss} baseline saved -> {1}" -f (Get-Date), $BaselineFile)
+            Send-Json $req 200 @{ ok = $true }
         }
         'POST /api/shutdown' {
             Send-Json $req 200 @{ ok = $true }

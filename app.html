@@ -26,6 +26,7 @@
   }
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body {
   margin: 0; background: var(--bg); color: var(--text);
   font: 14px/1.5 "Segoe UI", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
@@ -66,6 +67,17 @@ label.check { display: inline-flex; gap: 6px; align-items: center; cursor: point
 .alerts { list-style: none; margin: 0; padding: 6px 0; }
 .alerts li { display: flex; gap: 10px; align-items: baseline; padding: 5px 14px; cursor: pointer; }
 .alerts li:hover { background: var(--grid); }
+.alerts li.static { cursor: default; color: var(--muted); }
+.alerts li.static:hover { background: none; }
+.alerts .where { font-size: 12px; color: var(--muted); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.dot.info { background: var(--other); }
+.flag { display: inline-block; font-size: 11px; font-weight: 600; border-radius: 4px; padding: 0 5px; margin-left: 6px; vertical-align: 1px; }
+.flag.err { background: color-mix(in srgb, var(--err) 16%, transparent); color: var(--err); }
+.flag.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+.flag.info { background: var(--grid); color: var(--muted); }
+.findings { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.findings li { display: flex; gap: 8px; align-items: baseline; }
+.panel-head .spacer { flex: 1; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.err { background: var(--err); } .dot.off { background: var(--other); }
 
@@ -170,8 +182,18 @@ details summary { cursor: pointer; color: var(--muted); }
     <label class="check"><input type="checkbox" id="showDisabled"> 無効なタスクも表示</label>
   </div>
 
+  <section class="panel" id="secPanel" hidden>
+    <div class="panel-head">
+      <h2>セキュリティチェック</h2><span class="muted" id="secCount"></span>
+      <span class="spacer"></span>
+      <span class="muted" id="baselineInfo"></span>
+      <button class="btn" id="saveBaseline" hidden title="今あるタスクを「確認済み」として記録し、以降の追加・変更を検出します">今の状態を確認済みにする</button>
+    </div>
+    <ul class="alerts" id="secAlerts"></ul>
+  </section>
+
   <section class="panel" id="alertsPanel" hidden>
-    <div class="panel-head"><h2>要確認</h2><span class="muted" id="alertsCount"></span></div>
+    <div class="panel-head"><h2>動作の要確認</h2><span class="muted" id="alertsCount"></span></div>
     <ul class="alerts" id="alerts"></ul>
   </section>
 
@@ -481,7 +503,65 @@ function prepareTask(raw, runs) {
     res: r.f && r.r == null ? { cls: 'err', text: '起動失敗' } : resultInfo(r.r ?? 0, true),
   })).filter(r => r.s || r.e).sort((a, b) => (b.s || b.e) - (a.s || a.e));
   t.search = [t.name, t.path, t.description, ...t.actions.flatMap(a => [a.command, a.args])].filter(Boolean).join('\n').toLowerCase();
+  t.findings = securityFindings(t);
   return t;
+}
+
+/* ---------- security checks ---------- */
+// Heuristics for tasks planted as persistence (MITRE ATT&CK T1053.005). They point at things
+// worth a look; they are not proof of malware, and a clean result is not proof of safety.
+const LOLBINS = ['mshta.exe', 'rundll32.exe', 'regsvr32.exe', 'wscript.exe', 'cscript.exe', 'msbuild.exe', 'installutil.exe', 'certutil.exe', 'bitsadmin.exe', 'cmstp.exe', 'odbcconf.exe', 'regasm.exe', 'regsvcs.exe'];
+const SEV = { high: 'err', medium: 'warn', low: 'info' };
+function securityFindings(t) {
+  const out = [];
+  const add = (sev, msg) => { if (!out.some(f => f.msg === msg)) out.push({ sev, cls: SEV[sev], msg }); };
+  const isMs = /^\\microsoft\\/i.test(t.path);
+  const p = t.principal;
+  const asSystem = /^(S-1-5-18|S-1-5-19|S-1-5-20)$/i.test(p.userId || '') || /^(nt authority\\)?(system|localsystem|local service|network service)$/i.test(p.userId || '');
+  const userWritable = /\\users\\|%userprofile%|%appdata%|%localappdata%|%temp%|%tmp%|%public%|\\windows\\temp\\/i;
+
+  for (const a of t.actions) {
+    if (a.type !== 'Exec') continue;
+    const cmd = (a.command || '').replace(/"/g, ''), args = a.args || '', all = `${cmd} ${args}`;
+    const exe = cmd.split(/[\\/]/).pop().toLowerCase();
+    const isPs = /^(powershell|pwsh)(\.exe)?$/.test(exe) || /\b(powershell|pwsh)(\.exe)?\b/i.test(args);
+
+    if (isPs && args.split(/\s+/).some(tok => /^[-/]e/i.test(tok) && 'encodedcommand'.startsWith(tok.slice(1).toLowerCase())))
+      add('high', 'エンコード（難読化）された PowerShell コマンドを実行します');
+    if (/\b(iex|invoke-expression)\b/i.test(args))
+      add('high', '文字列をその場でコードとして実行します（Invoke-Expression）');
+    if (/downloadstring|downloadfile|downloaddata|invoke-webrequest|\biwr\b|invoke-restmethod|\birm\b|start-bitstransfer|net\.webclient|bitsadmin.*\/transfer|certutil.*-urlcache/i.test(all))
+      add('high', 'インターネットからファイルやコードをダウンロードします');
+    else if (/https?:\/\//i.test(args))
+      add('medium', '引数に URL が含まれています');
+    if (/\\appdata\\local\\temp\\|\\windows\\temp\\|\\users\\public\\|\$recycle\.bin|%temp%|%tmp%/i.test(all))
+      add('high', '一時フォルダや共有フォルダにあるファイルを実行します');
+    if (!isMs && LOLBINS.includes(exe))
+      add('medium', `${exe} を経由して実行します（マルウェアがよく悪用する Windows 標準ツール）`);
+    if (isPs && /-w(indowstyle)?\s+h(idden)?\b/i.test(args) && /-nop|-noprofile/i.test(args) && /-ep\s+bypass|-executionpolicy\s+bypass/i.test(args) && !/-file\s/i.test(args))
+      add('medium', '画面を隠し、実行ポリシーを回避してコマンドを直接実行します');
+    if (asSystem && userWritable.test(cmd))
+      add('high', 'SYSTEM 権限で、一般ユーザーが書き換えられる場所のファイルを実行します');
+  }
+  if (!isMs && /microsoft|windows|defender|onedrive|\bedge\b|svchost/i.test(t.name)) {
+    const official = t.actions.length && t.actions.every(a => a.type !== 'Exec' ||
+      /^(%windir%|%systemroot%|c:\\windows\\|c:\\program files|%programfiles|%localappdata%\\microsoft\\)|\\microsoft\\|\\google\\|\\mozilla\\/i.test((a.command || '').replace(/"/g, '')));
+    if (!official) add('medium', 'Microsoft や Windows を思わせる名前ですが、実行ファイルが公式の場所にありません');
+  }
+  if (!isMs && t.settings.hidden) add('low', 'タスクスケジューラの画面に表示されない「隠しタスク」です');
+  return out;
+}
+function baselineChange(t) {
+  const b = DATA.baseline && DATA.baseline.tasks;
+  if (!b) return null;
+  if (!(t.path in b)) return { cls: 'warn', label: '新規', msg: '確認済みにした後で新しく登録されたタスクです' };
+  if (b[t.path] !== t.hash) return { cls: 'warn', label: '変更', msg: '確認済みにした後で内容（コマンドやスケジュール）が変わりました' };
+  return null;
+}
+function flagsHtml(t) {
+  const top = t.findings.find(f => f.sev === 'high') || t.findings.find(f => f.sev === 'medium');
+  const ch = baselineChange(t);
+  return (top ? `<span class="flag ${top.cls}">${top.sev === 'high' ? '要注意' : '注意'}</span>` : '') + (ch ? `<span class="flag ${ch.cls}">${ch.label}</span>` : '');
 }
 
 /* ---------- state ---------- */
@@ -558,6 +638,45 @@ function renderAlerts(list) {
     `<li data-path="${esc(t.path)}"><span class="dot ${cls}"></span><b>${esc(t.name)}</b><span class="muted">${esc(msg)}</span></li>`).join('');
 }
 $('#alerts').addEventListener('click', e => { const li = e.target.closest('[data-path]'); if (li) openTask(li.dataset.path); });
+
+// Security findings cover every task regardless of the category filter: malware rarely files itself under "mine".
+function renderSecurity() {
+  $('#secPanel').hidden = !DATA.generatedAt;
+  if (!DATA.generatedAt) return;
+  const order = { err: 0, warn: 1, info: 2 };
+  const items = tasks.flatMap(t => [
+    ...(baselineChange(t) ? [{ t, cls: 'warn', msg: baselineChange(t).msg }] : []),
+    ...t.findings.map(f => ({ t, cls: f.cls, msg: f.msg })),
+  ]).sort((a, b) => order[a.cls] - order[b.cls]);
+  const b = DATA.baseline;
+  if (b && b.tasks) {
+    const present = new Set(tasks.map(t => t.path));
+    for (const path of Object.keys(b.tasks)) if (!present.has(path)) items.push({ path, cls: 'info', msg: '確認済みにした後で削除されました' });
+  }
+  const serious = items.filter(i => i.cls !== 'info').length;
+  $('#secCount').textContent = items.length ? `${serious}件の注意${items.length > serious ? ` · ${items.length - serious}件の情報` : ''}` : '';
+  $('#baselineInfo').textContent = b && b.savedAt ? `確認済み: ${fmtWhen(new Date(b.savedAt))}` : '確認済みの記録なし';
+  $('#saveBaseline').hidden = !LIVE;
+  const rows = items.map(({ t, path, cls, msg }) => t
+    ? `<li data-path="${esc(t.path)}"><span class="dot ${cls}"></span><b>${esc(t.name)}</b><span>${esc(msg)}</span><span class="where">${esc(t.path)}</span></li>`
+    : `<li class="static"><span class="dot ${cls}"></span><b>${esc(path.split('\\').pop())}</b><span>${esc(msg)}</span><span class="where">${esc(path)}</span></li>`);
+  if (!items.length) rows.push(`<li class="static"><span class="dot ok"></span>全 ${tasks.length} 件のタスクに不審な兆候は見つかりませんでした。</li>`);
+  if (!b) rows.push(`<li class="static"><span class="dot info"></span>${LIVE
+    ? '今のタスクを確認して問題がなければ「今の状態を確認済みにする」を押してください。以降に追加・変更されたタスクを検出できます。'
+    : '確認済みの記録がないため、タスクの追加・変更は検出していません。'}</li>`);
+  $('#secAlerts').innerHTML = rows.join('');
+}
+$('#secAlerts').addEventListener('click', e => { const li = e.target.closest('[data-path]'); if (li) openTask(li.dataset.path); });
+$('#saveBaseline').onclick = async () => {
+  if (!confirm('今あるすべてのタスクを「確認済み」として記録します。不審なタスクが残っていないか確認してから実行してください。')) return;
+  $('#saveBaseline').disabled = true;
+  try {
+    const r = await fetch('/api/baseline', { method: 'POST', headers: { 'X-Taskviz-Token': CONFIG.token } });
+    if (!r.ok) throw new Error(r.status);
+  } catch (err) { alert('保存できませんでした: ' + err.message); }
+  $('#saveBaseline').disabled = false;
+  reload();
+};
 
 /* ---------- timeline ---------- */
 function rangeBounds() {
@@ -663,6 +782,9 @@ function detailHtml(t) {
   const s = t.settings, p = t.principal;
   const timed = t.disabled ? [] : taskOccurrences(t, Date.now(), Date.now() + 30 * DAY).slice(0, 6);
   return `<div class="detail-body">
+    ${t.findings.length || baselineChange(t) ? `<div class="full"><h3>セキュリティ上の注意点</h3><ul class="findings">${[
+      ...(baselineChange(t) ? [{ cls: 'warn', msg: baselineChange(t).msg }] : []), ...t.findings,
+    ].map(f => `<li><span class="dot ${f.cls}"></span>${esc(f.msg)}</li>`).join('')}</ul></div>` : ''}
     ${t.description ? `<div class="full"><h3>説明</h3><div>${esc(t.description)}</div></div>` : ''}
     <div><h3>トリガー</h3><ul>${t.triggers.map(tr => `<li>${esc(describe(tr))}${tr.enabled ? '' : ' <span class="muted">［無効］</span>'}${tr.start && tr.kind !== 'CalendarTrigger' && tr.rep ? ` <span class="muted">（${esc(fmtWhen(new Date(tr.start)))} 起点）</span>` : ''}</li>`).join('') || '<li class="muted">なし（手動実行のみ）</li>'}</ul>
       ${timed.length ? `<h3 style="margin-top:10px">このあとの実行</h3><div>${timed.map(x => esc(fmtWhen(new Date(x)))).join('<br>')}</div>` : ''}</div>
@@ -712,7 +834,7 @@ function renderList(list) {
       const sched = t.triggers.map(tr => `<div${tr.enabled ? '' : ' class="muted"'}>${esc(describe(tr))}</div>`).join('') || '<span class="muted">手動のみ</span>';
       const open = state.open === t.path;
       return `<tr class="row${open ? ' open' : ''}" data-path="${esc(t.path)}">
-        <td><div class="nm">${esc(t.name)}</div><div class="sub">${esc(t.folder)}</div></td>
+        <td><div class="nm">${esc(t.name)}${flagsHtml(t)}</div><div class="sub">${esc(t.folder)}</div></td>
         <td class="c-state"><span class="badge ${stCls}">${stText}</span></td>
         <td>${sched}</td>
         <td>${t.nextRunD ? `${esc(fmtWhen(t.nextRunD))}<div class="sub">${esc(fmtRel(t.nextRunD))}</div>` : '<span class="muted">—</span>'}</td>
@@ -722,13 +844,13 @@ function renderList(list) {
     }).join('')}</tbody></table>`;
 }
 
-function openTask(path) {
+function openTask(path, smooth = true, scroll = true) {
   const t = tasks.find(x => x.path === path);
   if (t && !visible().includes(t)) { state.cats.add(cat(t)); if (t.disabled) state.showDisabled = true; }
   state.open = path;
   render();
   const row = document.querySelector(`tr.row[data-path="${CSS.escape(path)}"]`);
-  if (row) row.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (row && scroll) row.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'start' });
 }
 
 $('#list').addEventListener('click', async e => {
@@ -796,6 +918,7 @@ function render() {
   renderHeader();
   renderHistoryNote();
   renderCats();
+  renderSecurity();
   const list = visible();
   renderAlerts(list);
   renderTimeline(list);
@@ -826,9 +949,17 @@ $('#shutdown').onclick = async () => {
   document.body.innerHTML = '<main><h1>taskviz を停止しました</h1><p class="muted">このタブは閉じて構いません。もう一度使うときは taskviz.cmd を起動してください。</p></main>';
 };
 
+// Optional view settings in the URL, e.g. #range=week&cats=mine,app&open=\MyTask
+const hashParams = new URLSearchParams(location.hash.slice(1));
+if (['day', 'week', 'month'].includes(hashParams.get('range'))) state.range = hashParams.get('range');
+if (hashParams.get('cats')) state.cats = new Set(hashParams.get('cats').split(',').filter(c => c in CAT_LABEL));
+if (hashParams.get('q')) $('#q').value = state.q = hashParams.get('q');
+
 if (CONFIG.mode === 'static') setData(DATA);
 render();
-reload();
+const hashScroll = !hashParams.has('noscroll');
+if (hashParams.get('open') && CONFIG.mode === 'static') openTask(hashParams.get('open'), false, hashScroll);
+reload().then(() => { if (LIVE && hashParams.get('open')) openTask(hashParams.get('open'), false, hashScroll); });
 let rz;
 window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => renderTimeline(visible()), 150); });
 setInterval(() => {
