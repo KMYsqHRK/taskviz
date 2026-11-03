@@ -20,11 +20,17 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Smoke tests
-        shell: ${{ matrix.shell }}
+      # `shell` cannot take an expression, so each edition gets its own step
+      - name: Smoke tests (Windows PowerShell 5.1)
+        if: matrix.shell == 'powershell'
+        shell: powershell
         env:
-          # the page is edition-independent; require a real render on the Windows PowerShell leg
-          TASKVIZ_REQUIRE_RENDER: ${{ matrix.shell == 'powershell' && '1' || '' }}
+          # the page is edition-independent; require a real render on this leg
+          TASKVIZ_REQUIRE_RENDER: '1'
+        run: ./tests/Run-Tests.ps1
+      - name: Smoke tests (PowerShell 7)
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
         run: ./tests/Run-Tests.ps1
 
   lint:
