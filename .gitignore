@@ -1,0 +1,4 @@
+# snapshots contain your own task list
+*.snapshot.html
+snapshot*.html
+.claude/

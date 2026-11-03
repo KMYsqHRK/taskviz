@@ -1,0 +1,840 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>タスクスケジュール</title>
+<style>
+:root {
+  --bg: #f5f6f8; --panel: #ffffff; --text: #1c2230; --muted: #687385; --line: #e3e6eb; --grid: #edf0f3;
+  --weekend: rgba(120, 130, 150, .06);
+  --accent: #3366d6; --accent-soft: rgba(51, 102, 214, .16);
+  --other: #8c96a6; --other-soft: rgba(140, 150, 166, .22);
+  --ok: #1d9450; --warn: #c98200; --err: #d23f3f; --now: #e5484d;
+  --mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --labelw: 250px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111418; --panel: #191d23; --text: #e5e8ee; --muted: #98a2b0; --line: #2a3038; --grid: #21262e;
+    --weekend: rgba(255, 255, 255, .03);
+    --accent: #6f9cff; --accent-soft: rgba(111, 156, 255, .2);
+    --other: #7d8796; --other-soft: rgba(125, 135, 150, .25);
+    --ok: #3dbd72; --warn: #eda72f; --err: #f06767; --now: #ff6b6b;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.5 "Segoe UI", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
+}
+main { max-width: 1400px; margin: 0 auto; padding: 20px 16px 60px; }
+h1 { font-size: 20px; margin: 0; }
+h2 { font-size: 15px; margin: 0; }
+button, input { font: inherit; color: inherit; }
+.muted { color: var(--muted); }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; margin-bottom: 14px; }
+header .meta { color: var(--muted); font-size: 13px; }
+header .spacer { flex: 1; }
+header .live { display: inline-flex; gap: 10px; align-items: center; }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.danger { color: var(--err); }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.stale { background: color-mix(in srgb, var(--warn) 14%, var(--panel)); border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+  padding: 8px 12px; border-radius: 8px; margin-bottom: 12px; font-size: 13px; }
+
+.controls { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-bottom: 14px; }
+.chip { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 4px 12px; cursor: pointer; }
+.chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.chip .n { opacity: .75; margin-left: 4px; font-size: 12px; }
+.search { flex: 1 1 220px; max-width: 360px; border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 5px 10px; }
+label.check { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; color: var(--muted); }
+
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 16px; }
+.panel-head { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.panel-head .spacer { flex: 1; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; background: transparent; padding: 3px 10px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+/* alerts */
+.alerts { list-style: none; margin: 0; padding: 6px 0; }
+.alerts li { display: flex; gap: 10px; align-items: baseline; padding: 5px 14px; cursor: pointer; }
+.alerts li:hover { background: var(--grid); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.err { background: var(--err); } .dot.off { background: var(--other); }
+
+/* timeline */
+.tl { position: relative; }
+.tl-axis, .tl-row { display: grid; grid-template-columns: var(--labelw) 1fr; }
+.tl-axis { height: 26px; border-bottom: 1px solid var(--line); font-size: 11.5px; color: var(--muted); }
+.tl-axis .lane { position: relative; }
+.tl-axis .lbl { position: absolute; top: 5px; transform: translateX(-50%); white-space: nowrap; }
+.tl-grid { position: absolute; left: var(--labelw); right: 0; top: 26px; bottom: 0; pointer-events: none; }
+.tl-grid .g { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--grid); }
+.tl-grid .g.major { background: var(--line); }
+.tl-grid .we { position: absolute; top: 0; bottom: 0; background: var(--weekend); }
+.tl-grid .now { position: absolute; top: -26px; bottom: 0; width: 2px; margin-left: -1px; background: var(--now); z-index: 3; }
+.tl-grid .now::before { content: "今"; position: absolute; top: 0; left: 4px; font-size: 11px; color: var(--now); font-weight: 600; }
+.tl-row { min-height: 40px; border-bottom: 1px solid var(--grid); cursor: pointer; }
+.tl-row:hover { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+.tl-row:last-child { border-bottom: 0; }
+.tl-label { padding: 5px 10px 5px 14px; overflow: hidden; border-right: 1px solid var(--line); }
+.tl-label .nm { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tl-label .tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.tag { font-size: 11px; border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; color: var(--muted); white-space: nowrap; }
+.tag.ev { border-color: color-mix(in srgb, var(--accent) 45%, transparent); color: var(--accent); }
+.tag.off { border-color: var(--other); }
+.tl-row .lane { position: relative; z-index: 1; }
+.tl-row.disabled .lane { opacity: .4; }
+.mk { position: absolute; }
+.mk.tick { top: 9px; bottom: 9px; width: 3px; margin-left: -1px; border-radius: 2px; background: var(--c); }
+.mk.band { top: 12px; bottom: 12px; border-radius: 4px; background: var(--cs); border: 1px solid var(--c);
+  font-size: 11px; line-height: 14px; color: var(--c); padding: 0 5px; overflow: hidden; white-space: nowrap; min-width: 4px; }
+.mk.next { top: 50%; width: 9px; height: 9px; margin: -5px 0 0 -5px; transform: rotate(45deg); border: 2px solid var(--c); background: var(--panel); z-index: 2; }
+.mk.run { bottom: 2px; width: 6px; height: 6px; margin-left: -3px; border-radius: 50%; z-index: 2; }
+.mk.run.ok { background: var(--ok); } .mk.run.warn { background: var(--warn); } .mk.run.err { background: var(--err); width: 8px; height: 8px; margin-left: -4px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 10px 14px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { display: inline-block; position: relative; }
+.empty { padding: 24px 14px; color: var(--muted); text-align: center; }
+
+/* list */
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-size: 12px; font-weight: 600; color: var(--muted); padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td { padding: 8px 10px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+tr.row { cursor: pointer; }
+tr.row:hover td { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+tr.row.open td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+td .nm { font-weight: 600; }
+td .sub { font-size: 12px; color: var(--muted); }
+.badge { display: inline-block; font-size: 12px; border-radius: 4px; padding: 0 6px; white-space: nowrap; }
+.badge.running { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+.badge.ready { background: var(--grid); color: var(--muted); }
+.badge.disabled { background: var(--grid); color: var(--muted); text-decoration: line-through; }
+.res { display: inline-flex; gap: 5px; align-items: center; font-size: 12.5px; }
+.res.ok { color: var(--ok); } .res.warn { color: var(--warn); } .res.err { color: var(--err); } .res.none { color: var(--muted); }
+td.cmd { max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+tr.detail > td { background: var(--bg); padding: 0; }
+.detail-body { padding: 14px 18px 18px; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px 28px; }
+.detail-body h3 { font-size: 12px; color: var(--muted); margin: 0 0 4px; font-weight: 600; }
+.detail-body .full { grid-column: 1 / -1; }
+.detail-body ul { margin: 0; padding-left: 18px; }
+.detail-body dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0; }
+.detail-body dt { color: var(--muted); }
+.detail-body dd { margin: 0; }
+pre.code { margin: 0; padding: 8px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+  white-space: pre-wrap; word-break: break-all; font-family: var(--mono); font-size: 12.5px; }
+.cmds { display: flex; flex-direction: column; gap: 6px; }
+.cmdline { display: flex; gap: 8px; align-items: center; }
+.cmdline code { flex: 1; font-family: var(--mono); font-size: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; overflow-x: auto; white-space: nowrap; }
+.cmdline .what { width: 92px; flex: none; color: var(--muted); font-size: 12px; }
+.btn { border: 1px solid var(--line); background: var(--panel); border-radius: 6px; padding: 3px 10px; cursor: pointer; white-space: nowrap; }
+.btn:hover { border-color: var(--accent); }
+.runs { font-size: 12.5px; }
+.runs td { padding: 3px 10px 3px 0; border: 0; }
+details summary { cursor: pointer; color: var(--muted); }
+.note { font-size: 12.5px; color: var(--muted); padding: 10px 14px; border-top: 1px solid var(--line); }
+.note code { font-family: var(--mono); }
+
+@media (max-width: 760px) {
+  :root { --labelw: 128px; }
+  .tl-label .tags { display: none; }
+  th.c-cmd, td.cmd, th.c-state, td.c-state { display: none; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>タスクスケジュール</h1>
+    <span class="meta" id="meta"></span>
+    <span class="spacer"></span>
+    <span class="live" id="live" hidden>
+      <label class="check"><input type="checkbox" id="auto"> 1分ごとに自動更新</label>
+      <button class="btn" id="refresh">更新</button>
+      <button class="btn" id="shutdown" title="taskviz のサーバーを停止します">終了</button>
+    </span>
+  </header>
+  <div id="stale"></div>
+
+  <div class="controls">
+    <div id="cats"></div>
+    <input class="search" id="q" type="search" placeholder="名前・コマンド・説明で絞り込み">
+    <label class="check"><input type="checkbox" id="showDisabled"> 無効なタスクも表示</label>
+  </div>
+
+  <section class="panel" id="alertsPanel" hidden>
+    <div class="panel-head"><h2>要確認</h2><span class="muted" id="alertsCount"></span></div>
+    <ul class="alerts" id="alerts"></ul>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>タイムライン</h2>
+      <div class="seg" id="ranges">
+        <button data-r="day">1日</button><button data-r="week">7日</button><button data-r="month">30日</button>
+      </div>
+      <div class="seg">
+        <button id="prev" aria-label="前へ">‹</button><button id="today">今日</button><button id="next" aria-label="次へ">›</button>
+      </div>
+      <span class="muted" id="rangeLabel"></span>
+    </div>
+    <div class="tl" id="tl"></div>
+    <div class="legend">
+      <span><i class="mk tick" style="position:relative;display:inline-block;height:14px;--c:var(--accent)"></i>実行予定</span>
+      <span><i class="mk band" style="position:relative;display:inline-block;width:26px;height:10px;--c:var(--accent);--cs:var(--accent-soft)"></i>高頻度の繰り返し（まとめて表示）</span>
+      <span><i class="mk next" style="position:relative;display:inline-block;margin:0 2px;--c:var(--accent)"></i>次回（Windowsの算出値）</span>
+      <span><span class="dot ok"></span><span class="dot warn"></span><span class="dot err"></span>実行結果（成功・スキップ・失敗）</span>
+    </div>
+    <div class="note" id="historyNote" hidden></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>一覧</h2><span class="muted">次回実行が近い順 · 行をクリックで詳細</span></div>
+    <div id="list"></div>
+  </section>
+</main>
+
+<script id="config" type="application/json">__TASKVIZ_CONFIG__</script>
+<script id="data" type="application/json">__TASKVIZ_DATA__</script>
+<script>
+'use strict';
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const SEC = 1e3, MIN = 6e4, HOUR = 36e5, DAY = 864e5;
+const WD = '日月火水木金土';
+
+let CONFIG;
+try { CONFIG = JSON.parse($('#config').textContent); }
+catch { CONFIG = { mode: 'missing' }; }
+const LIVE = CONFIG.mode === 'live';
+let DATA = (CONFIG.mode === 'static' && JSON.parse($('#data').textContent)) || { tasks: [], history: {} };
+let loadError = CONFIG.mode === 'missing' ? 'このファイルは直接開けません。taskviz.cmd（または taskviz.ps1）から起動してください。' : null;
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('taskviz.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('taskviz.' + k, JSON.stringify(v)); } catch { } },
+};
+
+/* ---------- formatting ---------- */
+const pad = n => String(n).padStart(2, '0');
+const hm = d => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+const md = d => `${d.getMonth() + 1}/${d.getDate()}(${WD[d.getDay()]})`;
+const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+const startOfDay = t => { const d = new Date(t); d.setHours(0, 0, 0, 0); return +d; };
+function fmtWhen(d) {
+  if (!d) return '—';
+  const n = new Date();
+  if (sameDay(d, n)) return '今日 ' + hm(d);
+  return (d.getFullYear() !== n.getFullYear() ? d.getFullYear() + '/' : '') + md(d) + ' ' + hm(d);
+}
+function fmtRel(d) {
+  const diff = d - Date.now(), a = Math.abs(diff);
+  const s = a < MIN ? Math.round(a / SEC) + '秒' : a < HOUR ? Math.round(a / MIN) + '分' : a < DAY ? Math.round(a / HOUR) + '時間' : Math.round(a / DAY) + '日';
+  return diff >= 0 ? 'あと' + s : s + '前';
+}
+function parseDur(s) {
+  const m = /^P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:([\d.]+)S)?)?$/.exec(s || '');
+  if (!m) return 0;
+  const n = i => +m[i] || 0;
+  return n(1) * 365 * DAY + n(2) * 30 * DAY + n(3) * 7 * DAY + n(4) * DAY + n(5) * HOUR + n(6) * MIN + n(7) * SEC;
+}
+function fmtDur(ms) {
+  if (!ms) return '0';
+  const d = Math.floor(ms / DAY), h = Math.floor(ms % DAY / HOUR), m = Math.floor(ms % HOUR / MIN), s = Math.round(ms % MIN / SEC);
+  return [d && d + '日', h && h + '時間', m && m + '分', s && s + '秒'].filter(Boolean).join('');
+}
+const hex = n => '0x' + n.toString(16).toUpperCase().padStart(8, '0');
+
+/* ---------- result codes ---------- */
+const CODES = {
+  0x0: ['ok', '成功'],
+  0x41300: ['ok', '準備完了'],
+  0x41301: ['ok', '実行中'],
+  0x41302: ['none', '無効'],
+  0x41303: ['none', 'まだ一度も実行されていない'],
+  0x41304: ['none', '今後の実行予定なし'],
+  0x41306: ['warn', 'ユーザーにより終了された'],
+  0x41325: ['ok', 'キュー待ち'],
+  0x8004130F: ['err', '資格情報がない（パスワード未保存）'],
+  0x8004131F: ['warn', '既に実行中のためスキップ'],
+  0x80041326: ['none', 'タスクが無効'],
+  0x800710E0: ['warn', '前回の実行がまだ続いていたためスキップ'],
+  0x80070002: ['err', 'ファイルが見つからない'],
+  0x80070005: ['err', 'アクセス拒否'],
+  0x8007010B: ['err', '作業フォルダが無効'],
+  0xC000013A: ['warn', '強制終了された（Ctrl+C / シャットダウン）'],
+  0xC0000142: ['err', 'プロセスの初期化に失敗'],
+};
+function resultInfo(code, ran) {
+  if (code == null) return { cls: 'none', text: '—' };
+  if (code < 0) code += 2 ** 32;
+  if (CODES[code]) {
+    const [cls, text] = CODES[code];
+    return { cls: code === 0 && !ran ? 'none' : cls, text: code === 0 && !ran ? '—' : text, code };
+  }
+  if (code < 0x10000) return { cls: 'err', text: `終了コード ${code}`, code };
+  return { cls: 'err', text: `エラー ${hex(code)}`, code };
+}
+const STATES = { 0: ['ready', '不明'], 1: ['disabled', '無効'], 2: ['ready', 'キュー待ち'], 3: ['ready', '待機中'], 4: ['running', '実行中'] };
+
+/* ---------- task XML ---------- */
+const kids = (el, name) => el ? [...el.children].filter(c => !name || c.localName === name) : [];
+const kid = (el, name) => kids(el, name)[0] || null;
+const txt = (el, name) => { const k = kid(el, name); return k ? k.textContent.trim() : null; };
+const DOW = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const months = el => { const l = kids(el).map(x => MONTHS.indexOf(x.localName)).filter(i => i >= 0); return l.length ? l : [...Array(12).keys()]; };
+
+function parseTrigger(el) {
+  const tr = {
+    kind: el.localName, enabled: txt(el, 'Enabled') !== 'false',
+    start: txt(el, 'StartBoundary'), end: txt(el, 'EndBoundary'),
+    delay: parseDur(txt(el, 'Delay')), randomDelay: parseDur(txt(el, 'RandomDelay')),
+    userId: txt(el, 'UserId'), stateChange: txt(el, 'StateChange'), subscription: txt(el, 'Subscription'),
+  };
+  const rep = kid(el, 'Repetition');
+  if (rep) tr.rep = { interval: parseDur(txt(rep, 'Interval')), duration: parseDur(txt(rep, 'Duration')) };
+  if (tr.kind === 'CalendarTrigger') {
+    const d = kid(el, 'ScheduleByDay'), w = kid(el, 'ScheduleByWeek'), m = kid(el, 'ScheduleByMonth'), mw = kid(el, 'ScheduleByMonthDayOfWeek');
+    if (d) Object.assign(tr, { cal: 'daily', daysInterval: +txt(d, 'DaysInterval') || 1 });
+    else if (w) Object.assign(tr, { cal: 'weekly', weeksInterval: +txt(w, 'WeeksInterval') || 1, dow: kids(kid(w, 'DaysOfWeek')).map(x => DOW[x.localName]) });
+    else if (m) Object.assign(tr, { cal: 'monthly', days: kids(kid(m, 'DaysOfMonth')).map(x => x.textContent.trim()), months: months(kid(m, 'Months')) });
+    else if (mw) Object.assign(tr, { cal: 'monthlyDow', weeks: kids(kid(mw, 'Weeks')).map(x => x.textContent.trim()), dow: kids(kid(mw, 'DaysOfWeek')).map(x => DOW[x.localName]), months: months(kid(mw, 'Months')) });
+  }
+  tr.timed = !!tr.start && (tr.kind === 'TimeTrigger' || (tr.kind === 'CalendarTrigger' && !!tr.cal));
+  return tr;
+}
+
+function parseXml(xml) {
+  const doc = xml ? new DOMParser().parseFromString(xml, 'text/xml') : null;
+  const root = doc && doc.documentElement && doc.documentElement.localName === 'Task' ? doc.documentElement : null;
+  const reg = kid(root, 'RegistrationInfo'), set = kid(root, 'Settings'), pr = kid(kid(root, 'Principals'), 'Principal');
+  return {
+    description: txt(reg, 'Description'), author: txt(reg, 'Author'),
+    triggers: kids(kid(root, 'Triggers')).map(parseTrigger),
+    actions: kids(kid(root, 'Actions')).map(a => ({
+      type: a.localName, command: txt(a, 'Command'), args: txt(a, 'Arguments'), workdir: txt(a, 'WorkingDirectory'), classId: txt(a, 'ClassId'),
+    })),
+    principal: { userId: txt(pr, 'UserId'), groupId: txt(pr, 'GroupId'), logonType: txt(pr, 'LogonType'), runLevel: txt(pr, 'RunLevel') },
+    settings: {
+      hidden: txt(set, 'Hidden') === 'true',
+      multiple: txt(set, 'MultipleInstancesPolicy') || 'IgnoreNew',
+      timeLimit: txt(set, 'ExecutionTimeLimit') ?? 'PT72H',
+      noBattery: txt(set, 'DisallowStartIfOnBatteries') !== 'false',
+      stopOnBattery: txt(set, 'StopIfGoingOnBatteries') !== 'false',
+      startWhenAvailable: txt(set, 'StartWhenAvailable') === 'true',
+      wake: txt(set, 'WakeToRun') === 'true',
+      network: txt(set, 'RunOnlyIfNetworkAvailable') === 'true',
+      idle: txt(set, 'RunOnlyIfIdle') === 'true',
+    },
+  };
+}
+
+/* ---------- schedule description ---------- */
+const STATECHANGE = { ConsoleConnect: 'コンソール接続時', ConsoleDisconnect: 'コンソール切断時', RemoteConnect: 'リモート接続時', RemoteDisconnect: 'リモート切断時', SessionLock: 'ロック時', SessionUnlock: 'ロック解除時' };
+function describe(tr) {
+  const s = tr.start ? new Date(tr.start) : null, at = s ? hm(s) : '';
+  let t;
+  switch (tr.kind) {
+    case 'TimeTrigger':
+      t = tr.rep && tr.rep.interval ? `${fmtDur(tr.rep.interval)}ごと` : `${s ? fmtWhen(s) : '?'} に1回`; break;
+    case 'CalendarTrigger':
+      if (tr.cal === 'daily') t = `${tr.daysInterval === 1 ? '毎日' : tr.daysInterval + '日ごと'} ${at}`;
+      else if (tr.cal === 'weekly') t = `${tr.weeksInterval === 1 ? '毎週' : tr.weeksInterval + '週ごと'} ${tr.dow.map(d => WD[d]).join('・')} ${at}`;
+      else if (tr.cal === 'monthly') t = `${tr.months.length === 12 ? '毎月' : tr.months.map(m => m + 1).join('・') + '月'} ${tr.days.map(d => d === 'Last' ? '末日' : d + '日').join('・')} ${at}`;
+      else if (tr.cal === 'monthlyDow') t = `${tr.months.length === 12 ? '毎月' : tr.months.map(m => m + 1).join('・') + '月'} ${tr.weeks.map(w => w === 'Last' ? '最終' : '第' + w).join('・')}${tr.dow.map(d => WD[d]).join('・')}曜 ${at}`;
+      else t = 'カレンダー';
+      if (tr.rep && tr.rep.interval) t += ` から${fmtDur(tr.rep.interval)}ごと`;
+      break;
+    case 'LogonTrigger': t = 'ログオン時'; break;
+    case 'BootTrigger': t = '起動時'; break;
+    case 'IdleTrigger': t = 'アイドル時'; break;
+    case 'RegistrationTrigger': t = '登録・更新時'; break;
+    case 'EventTrigger': t = 'イベント発生時'; break;
+    case 'SessionStateChangeTrigger': t = STATECHANGE[tr.stateChange] || 'セッション変化時'; break;
+    case 'WnfStateChangeTrigger': t = 'システム状態の変化時'; break;
+    default: t = tr.kind.replace(/Trigger$/, '');
+  }
+  if (tr.rep && tr.rep.interval && tr.rep.duration) t += `（${fmtDur(tr.rep.duration)}間）`;
+  if (tr.delay) t += ` +${fmtDur(tr.delay)}遅延`;
+  if (tr.randomDelay) t += ` ±最大${fmtDur(tr.randomDelay)}ランダム`;
+  if (tr.end) t += `（${fmtWhen(new Date(tr.end))}まで）`;
+  return t;
+}
+
+/* ---------- occurrence calculation ---------- */
+function* baseTimes(tr, lo, hi) {
+  const s = new Date(tr.start), s0 = +s;
+  const at = (y, m, d) => +new Date(y, m, d, s.getHours(), s.getMinutes(), s.getSeconds());
+  let guard = 0;
+  if (tr.kind === 'TimeTrigger') { if (s0 <= hi) yield s0; return; }
+  if (tr.cal === 'daily') {
+    const n = tr.daysInterval;
+    for (let k = Math.max(0, Math.floor((lo - s0) / (n * DAY)) - 1); guard++ < 5000; k++) {
+      const t = at(s.getFullYear(), s.getMonth(), s.getDate() + k * n);
+      if (t > hi) break;
+      if (t >= lo) yield t;
+    }
+  } else if (tr.cal === 'weekly') {
+    const n = tr.weeksInterval, ws = new Date(s.getFullYear(), s.getMonth(), s.getDate() - s.getDay());
+    for (let w = Math.max(0, Math.floor((lo - ws) / (7 * DAY)) - 1); guard++ < 5000; w++) {
+      if (+new Date(ws.getFullYear(), ws.getMonth(), ws.getDate() + w * 7) > hi) break;
+      if (w % n) continue;
+      for (const dw of tr.dow) {
+        const t = at(ws.getFullYear(), ws.getMonth(), ws.getDate() + w * 7 + dw);
+        if (t >= s0 && t >= lo && t <= hi) yield t;
+      }
+    }
+  } else {
+    const first = new Date(Math.max(lo, s0));
+    for (let y = first.getFullYear(), m = first.getMonth(); guard++ < 2000; m === 11 ? (m = 0, y++) : m++) {
+      if (+new Date(y, m, 1) > hi) break;
+      if (!tr.months.includes(m)) continue;
+      const dim = new Date(y, m + 1, 0).getDate(), days = [];
+      if (tr.cal === 'monthly') {
+        for (const d of tr.days) { if (d === 'Last') days.push(dim); else if (+d <= dim) days.push(+d); }
+      } else {
+        const fd = new Date(y, m, 1).getDay();
+        for (const wk of tr.weeks) for (const dw of tr.dow) {
+          const f = 1 + (dw - fd + 7) % 7;
+          const d = wk === 'Last' ? f + 7 * Math.floor((dim - f) / 7) : f + 7 * (+wk - 1);
+          if (d <= dim) days.push(d);
+        }
+      }
+      for (const d of days) { const t = at(y, m, d); if (t >= s0 && t >= lo && t <= hi) yield t; }
+    }
+  }
+}
+
+function occurrences(tr, from, to) {
+  if (!tr.timed || !tr.enabled) return [];
+  const hi = Math.min(to, tr.end ? +new Date(tr.end) : Infinity);
+  if (hi < from) return [];
+  const iv = tr.rep ? tr.rep.interval : 0, dur = tr.rep ? tr.rep.duration : 0;
+  const period = { daily: tr.daysInterval * DAY, weekly: tr.weeksInterval * 7 * DAY }[tr.cal] || 62 * DAY;
+  const lo = from - tr.delay - (iv ? (dur || period) : 0);
+  let bases = [...baseTimes(tr, lo, hi - tr.delay)].sort((a, b) => a - b);
+  if (iv && !dur) {
+    // indefinite repetition: each new base restarts the pattern, so only the latest base before `from` matters
+    const i = bases.findIndex(b => b + tr.delay >= from);
+    bases = i < 0 ? bases.slice(-1) : bases.slice(Math.max(0, i - 1));
+  }
+  const out = [];
+  bases.forEach((b, i) => {
+    if (!iv) { const t = b + tr.delay; if (t >= from && t <= hi) out.push(t); return; }
+    const stop = dur ? b + dur : (bases[i + 1] ?? Infinity);
+    for (let k = Math.max(0, Math.ceil((from - tr.delay - b) / iv)); out.length < 50000; k++) {
+      const t = b + k * iv;
+      if (t >= stop || t + tr.delay > hi) break;
+      out.push(t + tr.delay);
+    }
+  });
+  return out;
+}
+function taskOccurrences(t, from, to) {
+  const all = t.triggers.flatMap(tr => occurrences(tr, from, to)).sort((a, b) => a - b);
+  return all.filter((x, i) => i === 0 || x - all[i - 1] >= SEC);
+}
+
+/* ---------- prepare ---------- */
+let PROFILE = '', tasks = [];
+const asList = v => Array.isArray(v) ? v : v == null ? [] : [v];
+
+function autoCategory(t) {
+  if (/^\\microsoft\\/i.test(t.path) || /^microsoft/i.test(t.author || '')) return 'windows';
+  // "Mine" = the action points into the user's profile outside AppData (scripts, repos, Documents...)
+  const strs = t.actions.flatMap(a => [a.command, a.args, a.workdir]).filter(Boolean)
+    .map(s => s.toLowerCase().replace(/%userprofile%/g, PROFILE));
+  const mine = PROFILE && strs.some(s => {
+    for (let i = s.indexOf(PROFILE + '\\'); i >= 0; i = s.indexOf(PROFILE + '\\', i + 1))
+      if (!s.startsWith('appdata\\', i + PROFILE.length + 1)) return true;
+    return false;
+  });
+  return mine ? 'mine' : 'app';
+}
+
+function setData(d) {
+  DATA = d;
+  PROFILE = (d.userProfile || '').toLowerCase();
+  const runs = d.history && d.history.runs || {};
+  tasks = asList(d.tasks).map(raw => prepareTask(raw, runs));
+}
+function prepareTask(raw, runs) {
+  const t = { ...raw, ...parseXml(raw.xml) };
+  t.lastRunD = raw.lastRun ? new Date(raw.lastRun) : null;
+  t.nextRunD = raw.nextRun ? new Date(raw.nextRun) : null;
+  t.result = resultInfo(raw.lastResult, !!t.lastRunD);
+  // a resident task that is still running skips every new trigger by design
+  if (raw.state === 4 && [0x800710E0, 0x8004131F].includes(t.result.code))
+    t.result = { cls: 'ok', text: '常駐中（重複起動はスキップ）', code: t.result.code };
+  t.disabled = raw.enabled === false || raw.state === 1;
+  t.autoCat = autoCategory(t);
+  t.runs = asList(runs[raw.path]).map(r => ({
+    s: r.s ? new Date(r.s) : null, e: r.e ? new Date(r.e) : null,
+    res: r.f && r.r == null ? { cls: 'err', text: '起動失敗' } : resultInfo(r.r ?? 0, true),
+  })).filter(r => r.s || r.e).sort((a, b) => (b.s || b.e) - (a.s || a.e));
+  t.search = [t.name, t.path, t.description, ...t.actions.flatMap(a => [a.command, a.args])].filter(Boolean).join('\n').toLowerCase();
+  return t;
+}
+
+/* ---------- state ---------- */
+const CAT_LABEL = { mine: '自分のタスク', app: 'アプリ', windows: 'Windows' };
+const state = {
+  cats: new Set(store.get('cats', ['mine'])),
+  overrides: store.get('overrides', {}),
+  showDisabled: store.get('showDisabled', true),
+  range: store.get('range', 'day'),
+  offset: 0, q: '', open: null,
+};
+const cat = t => state.overrides[t.path] || t.autoCat;
+const color = t => cat(t) === 'mine' ? ['var(--accent)', 'var(--accent-soft)'] : ['var(--other)', 'var(--other-soft)'];
+
+function visible() {
+  const q = state.q.trim().toLowerCase();
+  return tasks.filter(t => state.cats.has(cat(t)) && (state.showDisabled || !t.disabled) && (!q || t.search.includes(q)))
+    .sort((a, b) => (a.disabled - b.disabled) || ((a.nextRunD ? +a.nextRunD : Infinity) - (b.nextRunD ? +b.nextRunD : Infinity)) || a.name.localeCompare(b.name));
+}
+
+/* ---------- header / controls ---------- */
+function renderHeader() {
+  $('#live').hidden = !LIVE;
+  if (loadError) $('#stale').innerHTML = `<div class="stale">${esc(loadError)}</div>`;
+  if (!DATA.generatedAt) { $('#meta').textContent = loadError ? '' : '読み込み中…'; return; }
+  const gen = new Date(DATA.generatedAt);
+  $('#meta').textContent = `${DATA.computer} · ${LIVE ? `${hm(gen)}:${pad(gen.getSeconds())} 取得` : fmtWhen(gen) + ' 時点のスナップショット'} · 全${tasks.length}件`;
+  if (loadError) return;
+  $('#stale').innerHTML = !LIVE && Date.now() - gen > 30 * MIN
+    ? `<div class="stale">このスナップショットは${fmtRel(gen)}のものです。最新の状態は taskviz.cmd で確認できます。</div>` : '';
+}
+function renderCats() {
+  const counts = { mine: 0, app: 0, windows: 0 };
+  tasks.forEach(t => counts[cat(t)]++);
+  $('#cats').innerHTML = Object.keys(CAT_LABEL).map(c =>
+    `<button class="chip" data-cat="${c}" aria-pressed="${state.cats.has(c)}">${CAT_LABEL[c]}<span class="n">${counts[c]}</span></button>`).join(' ');
+}
+$('#cats').addEventListener('click', e => {
+  const b = e.target.closest('[data-cat]'); if (!b) return;
+  const c = b.dataset.cat;
+  state.cats.has(c) ? state.cats.delete(c) : state.cats.add(c);
+  store.set('cats', [...state.cats]);
+  render();
+});
+$('#q').addEventListener('input', e => { state.q = e.target.value; render(); });
+$('#showDisabled').checked = state.showDisabled;
+$('#showDisabled').addEventListener('change', e => { state.showDisabled = e.target.checked; store.set('showDisabled', state.showDisabled); render(); });
+$('#ranges').addEventListener('click', e => {
+  const b = e.target.closest('[data-r]'); if (!b) return;
+  state.range = b.dataset.r; state.offset = 0; store.set('range', state.range); render();
+});
+$('#prev').onclick = () => { state.offset--; render(); };
+$('#next').onclick = () => { state.offset++; render(); };
+$('#today').onclick = () => { state.offset = 0; render(); };
+
+/* ---------- alerts ---------- */
+function alertsFor(t) {
+  const out = [];
+  if (t.result.cls === 'err') out.push(['err', `前回の実行が失敗: ${t.result.text}`]);
+  else if (t.result.cls === 'warn') out.push(['warn', `前回: ${t.result.text}`]);
+  if (t.missedRuns > 0) out.push(['warn', `実行されなかった回が ${t.missedRuns} 回あります`]);
+  if (!t.disabled && t.triggers.length && t.triggers.every(tr => tr.timed) && !t.nextRunD)
+    out.push(['warn', '今後の実行予定がありません']);
+  if (t.disabled && cat(t) === 'mine') out.push(['off', '無効になっています']);
+  const fails = t.runs.filter(r => r.res.cls === 'err').length;
+  if (fails && t.result.cls !== 'err') out.push(['err', `直近の履歴で ${fails} 回失敗`]);
+  return out;
+}
+function renderAlerts(list) {
+  const items = list.flatMap(t => alertsFor(t).map(([cls, msg]) => ({ t, cls, msg })));
+  $('#alertsPanel').hidden = !items.length;
+  $('#alertsCount').textContent = items.length ? `${items.length}件` : '';
+  $('#alerts').innerHTML = items.map(({ t, cls, msg }) =>
+    `<li data-path="${esc(t.path)}"><span class="dot ${cls}"></span><b>${esc(t.name)}</b><span class="muted">${esc(msg)}</span></li>`).join('');
+}
+$('#alerts').addEventListener('click', e => { const li = e.target.closest('[data-path]'); if (li) openTask(li.dataset.path); });
+
+/* ---------- timeline ---------- */
+function rangeBounds() {
+  const today = startOfDay(Date.now());
+  const days = { day: 1, week: 7, month: 30 }[state.range];
+  const d = new Date(today); d.setDate(d.getDate() + state.offset * days);
+  const e = new Date(d); e.setDate(e.getDate() + days);
+  return [+d, +e];
+}
+function renderTimeline(list) {
+  const [from, to] = rangeBounds(), span = to - from;
+  const pct = t => ((t - from) / span * 100).toFixed(3) + '%';
+  document.querySelectorAll('#ranges button').forEach(b => b.setAttribute('aria-pressed', b.dataset.r === state.range));
+  const fd = new Date(from), ld = new Date(to - 1);
+  $('#rangeLabel').textContent = state.range === 'day' ? md(fd) : `${md(fd)} – ${md(ld)}`;
+
+  const tl = $('#tl');
+  const laneW = Math.max(200, tl.clientWidth - parseFloat(getComputedStyle(tl).getPropertyValue('--labelw')));
+  const pxMs = span / laneW;
+
+  // grid + axis
+  const grid = [], axis = [];
+  if (state.range === 'day') {
+    for (let h = 0; h <= 24; h++) {
+      const t = from + h * HOUR;
+      grid.push(`<div class="g${h % 3 ? '' : ' major'}" style="left:${pct(t)}"></div>`);
+      if (h % 3 === 0 && h < 24 && (laneW > 500 || h % 6 === 0)) axis.push(`<span class="lbl" style="left:${pct(t)}">${h}:00</span>`);
+    }
+  } else {
+    const every = Math.max(1, Math.ceil(56 / (laneW / (span / DAY))));
+    let i = 0;
+    for (const d = new Date(from); +d < to; d.setDate(d.getDate() + 1), i++) {
+      const t = +d, next = +new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
+      if (d.getDay() === 0 || d.getDay() === 6) grid.push(`<div class="we" style="left:${pct(t)};width:${((next - t) / span * 100).toFixed(3)}%"></div>`);
+      grid.push(`<div class="g major" style="left:${pct(t)}"></div>`);
+      if (state.range === 'week') for (const h of [6, 12, 18]) grid.push(`<div class="g" style="left:${pct(t + h * HOUR)}"></div>`);
+      if (i % every === 0) axis.push(`<span class="lbl" style="left:${pct(t + (next - t) / 2)}">${state.range === 'week' ? md(d) : `${d.getMonth() + 1}/${d.getDate()}`}</span>`);
+    }
+  }
+  const now = Date.now();
+  if (now >= from && now < to) grid.push(`<div class="now" style="left:${pct(now)}"></div>`);
+
+  const rows = list.map(t => {
+    const [c, cs] = color(t);
+    const marks = [];
+    const occ = t.disabled ? [] : taskOccurrences(t, from, to);
+    // merge occurrences closer than ~7px into one band
+    const segs = [];
+    for (const x of occ) {
+      const s = segs[segs.length - 1];
+      if (s && x - s.b <= 7 * pxMs) { s.b = x; s.n++; } else segs.push({ a: x, b: x, n: 1 });
+    }
+    for (const s of segs) {
+      if (s.n === 1) { marks.push(`<div class="mk tick" style="left:${pct(s.a)}" title="${esc(fmtWhen(new Date(s.a)))}"></div>`); continue; }
+      const step = (s.b - s.a) / (s.n - 1);
+      const w = (s.b - s.a) / span * 100;
+      const lbl = `${fmtDur(Math.round(step / SEC) * SEC)}ごと`;
+      marks.push(`<div class="mk band" style="left:${pct(s.a)};width:${w.toFixed(3)}%" title="${esc(`${fmtWhen(new Date(s.a))} – ${fmtWhen(new Date(s.b))}\n${lbl} · ${s.n}回`)}">${w * laneW / 100 > 70 ? esc(lbl) : ''}</div>`);
+    }
+    if (t.nextRunD && +t.nextRunD >= from && +t.nextRunD < to)
+      marks.push(`<div class="mk next" style="left:${pct(+t.nextRunD)}" title="次回 ${esc(fmtWhen(t.nextRunD))}"></div>`);
+    // past runs: from history if available, else just the last run
+    const runs = t.runs.length ? t.runs : t.lastRunD ? [{ s: t.lastRunD, res: t.result }] : [];
+    for (const r of runs) {
+      const at = +(r.s || r.e);
+      if (at < from || at >= to) continue;
+      marks.push(`<div class="mk run ${r.res.cls === 'none' ? 'ok' : r.res.cls}" style="left:${pct(at)}" title="${esc(`${fmtWhen(new Date(at))} 実行 · ${r.res.text}`)}"></div>`);
+    }
+    const evs = [...new Set(t.triggers.filter(tr => !tr.timed && tr.enabled).map(tr => describe({ ...tr, delay: 0, randomDelay: 0, end: null })))];
+    const tags = evs.map(e => `<span class="tag ev">${esc(e)}</span>`);
+    if (t.disabled) tags.unshift('<span class="tag off">無効</span>');
+    return `<div class="tl-row${t.disabled ? ' disabled' : ''}" data-path="${esc(t.path)}" style="--c:${c};--cs:${cs}">
+      <div class="tl-label"><div class="nm" title="${esc(t.path)}">${esc(t.name)}</div>${tags.length ? `<div class="tags">${tags.join('')}</div>` : ''}</div>
+      <div class="lane">${marks.join('')}</div></div>`;
+  });
+
+  tl.innerHTML = `<div class="tl-axis"><div></div><div class="lane">${axis.join('')}</div></div>
+    <div class="tl-grid">${grid.join('')}</div>
+    ${rows.join('') || '<div class="empty">表示するタスクがありません</div>'}`;
+}
+$('#tl').addEventListener('click', e => { const r = e.target.closest('.tl-row'); if (r) openTask(r.dataset.path); });
+
+/* ---------- list ---------- */
+function shortCmd(a) {
+  if (a.type !== 'Exec') return a.type === 'ComHandler' ? `COM ${a.classId || ''}` : a.type;
+  const base = p => (p || '').replace(/^"|"$/g, '').split(/[\\/]/).pop();
+  const script = (a.args || '').match(/"([^"]+\.(?:ps1|py|pyw|bat|cmd|js|mjs|vbs|exe|sh))"|(\S+\.(?:ps1|py|pyw|bat|cmd|js|mjs|vbs|exe|sh))\b/i);
+  return script ? `${base(a.command)} … ${base(script[1] || script[2])}` : `${base(a.command)} ${a.args || ''}`;
+}
+const LOGON = {
+  InteractiveToken: 'ログオン中のみ実行', Password: 'ログオンしていなくても実行（パスワード保存）', S4U: 'ログオンしていなくても実行',
+  ServiceAccount: 'サービスアカウント', InteractiveTokenOrPassword: 'ログオン中 / パスワード', Group: 'グループ',
+};
+const MULTI = { IgnoreNew: '前回がまだ実行中なら新しい実行をスキップ', Parallel: '並列で実行', Queue: '前回の終了を待って実行', StopExisting: '前回を止めてから実行' };
+
+function detailHtml(t) {
+  const q = `"${t.path}"`;
+  const cmds = [
+    ['今すぐ実行', `schtasks /run /tn ${q}`],
+    t.disabled ? ['有効にする', `schtasks /change /tn ${q} /enable`] : ['無効にする', `schtasks /change /tn ${q} /disable`],
+    ['削除', `schtasks /delete /tn ${q} /f`],
+  ];
+  const s = t.settings, p = t.principal;
+  const timed = t.disabled ? [] : taskOccurrences(t, Date.now(), Date.now() + 30 * DAY).slice(0, 6);
+  return `<div class="detail-body">
+    ${t.description ? `<div class="full"><h3>説明</h3><div>${esc(t.description)}</div></div>` : ''}
+    <div><h3>トリガー</h3><ul>${t.triggers.map(tr => `<li>${esc(describe(tr))}${tr.enabled ? '' : ' <span class="muted">［無効］</span>'}${tr.start && tr.kind !== 'CalendarTrigger' && tr.rep ? ` <span class="muted">（${esc(fmtWhen(new Date(tr.start)))} 起点）</span>` : ''}</li>`).join('') || '<li class="muted">なし（手動実行のみ）</li>'}</ul>
+      ${timed.length ? `<h3 style="margin-top:10px">このあとの実行</h3><div>${timed.map(x => esc(fmtWhen(new Date(x)))).join('<br>')}</div>` : ''}</div>
+    <div><h3>状態</h3><dl>
+      <dt>状態</dt><dd>${esc(STATES[t.state]?.[1] ?? '—')}</dd>
+      <dt>前回</dt><dd>${esc(fmtWhen(t.lastRunD))} <span class="res ${t.result.cls}">${esc(t.result.text)}</span>${t.result.code != null && t.result.code !== 0 ? ` <span class="muted mono">${hex(t.result.code)}</span>` : ''}</dd>
+      <dt>次回</dt><dd>${esc(fmtWhen(t.nextRunD))}</dd>
+      ${t.missedRuns ? `<dt>実行漏れ</dt><dd>${t.missedRuns} 回</dd>` : ''}
+      <dt>実行ユーザー</dt><dd>${esc(LOGON[p.logonType] || p.logonType || '—')}${p.runLevel === 'HighestAvailable' ? ' · 管理者権限' : ''}</dd>
+      <dt>多重起動</dt><dd>${esc(MULTI[s.multiple] || s.multiple)}</dd>
+      <dt>実行時間の上限</dt><dd>${parseDur(s.timeLimit) ? esc(fmtDur(parseDur(s.timeLimit))) : '無制限'}</dd>
+      <dt>電源</dt><dd>${s.noBattery ? 'バッテリー駆動時は開始しない' : 'バッテリーでも開始'}${s.wake ? ' · スリープ解除して実行' : ''}</dd>
+      <dt>実行漏れ時</dt><dd>${s.startWhenAvailable ? '気づいた時点ですぐ実行' : '次の予定まで待つ'}</dd>
+      ${s.network ? '<dt>条件</dt><dd>ネットワーク接続時のみ</dd>' : ''}
+      ${s.idle ? '<dt>条件</dt><dd>アイドル時のみ</dd>' : ''}
+      ${s.hidden ? '<dt>表示</dt><dd>隠しタスク</dd>' : ''}
+    </dl></div>
+    <div class="full"><h3>実行内容</h3>${t.actions.map(a => a.type === 'Exec'
+      ? `<pre class="code">${esc(a.command)}${a.args ? ' ' + esc(a.args) : ''}${a.workdir ? `\n<span class="muted">作業フォルダ: ${esc(a.workdir)}</span>` : ''}</pre>`
+      : `<pre class="code">${esc(a.type)} ${esc(a.classId || '')}</pre>`).join('') || '<span class="muted">なし</span>'}</div>
+    ${t.runs.length ? `<div class="full"><h3>実行履歴（直近 ${Math.min(t.runs.length, 15)} 件 / ${t.runs.length} 件）</h3><table class="runs">${t.runs.slice(0, 15).map(r =>
+      `<tr><td>${esc(fmtWhen(r.s || r.e))}</td><td class="muted">${r.s && r.e ? esc(fmtDur(Math.max(SEC, r.e - r.s))) : ''}</td><td><span class="res ${r.res.cls}"><span class="dot ${r.res.cls === 'none' ? 'ok' : r.res.cls}"></span>${esc(r.res.text)}</span></td></tr>`).join('')}</table></div>` : ''}
+    ${LIVE ? `<div class="full"><h3>操作</h3><div class="actions">
+      <button class="btn" data-act="run" data-path="${esc(t.path)}">今すぐ実行</button>
+      ${t.state === 4 ? `<button class="btn danger" data-act="stop" data-path="${esc(t.path)}">停止</button>` : ''}
+      ${t.disabled ? `<button class="btn" data-act="enable" data-path="${esc(t.path)}">有効にする</button>`
+        : `<button class="btn danger" data-act="disable" data-path="${esc(t.path)}">無効にする</button>`}
+      <span class="muted" data-act-msg></span></div></div>` : ''}
+    <div class="full"><h3>操作コマンド（コピーしてターミナルで実行）</h3><div class="cmds">${cmds.map(([w, c]) =>
+      `<div class="cmdline"><span class="what">${w}</span><code>${esc(c)}</code><button class="btn" data-copy="${esc(c)}">コピー</button></div>`).join('')}</div></div>
+    <div class="full" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <span class="muted">分類: ${CAT_LABEL[cat(t)]}${state.overrides[t.path] ? '（手動）' : '（自動判定）'}</span>
+      <button class="btn" data-mine="${esc(t.path)}">${cat(t) === 'mine' ? '自分のタスクから外す' : '自分のタスクとして扱う'}</button>
+      ${state.overrides[t.path] ? `<button class="btn" data-reset="${esc(t.path)}">自動判定に戻す</button>` : ''}
+      <span class="muted">${esc(t.path)}</span>
+    </div>
+    <details class="full"><summary>XML 定義を表示</summary><pre class="code">${esc(t.xml || '（取得できませんでした）')}</pre></details>
+  </div>`;
+}
+
+function renderList(list) {
+  if (!list.length) { $('#list').innerHTML = '<div class="empty">表示するタスクがありません</div>'; return; }
+  $('#list').innerHTML = `<table><thead><tr>
+      <th>タスク</th><th class="c-state">状態</th><th>スケジュール</th><th>次回</th><th>前回</th><th class="c-cmd">実行内容</th></tr></thead><tbody>
+    ${list.map(t => {
+      const [stCls, stText] = t.disabled ? ['disabled', '無効'] : STATES[t.state] || ['ready', '—'];
+      const sched = t.triggers.map(tr => `<div${tr.enabled ? '' : ' class="muted"'}>${esc(describe(tr))}</div>`).join('') || '<span class="muted">手動のみ</span>';
+      const open = state.open === t.path;
+      return `<tr class="row${open ? ' open' : ''}" data-path="${esc(t.path)}">
+        <td><div class="nm">${esc(t.name)}</div><div class="sub">${esc(t.folder)}</div></td>
+        <td class="c-state"><span class="badge ${stCls}">${stText}</span></td>
+        <td>${sched}</td>
+        <td>${t.nextRunD ? `${esc(fmtWhen(t.nextRunD))}<div class="sub">${esc(fmtRel(t.nextRunD))}</div>` : '<span class="muted">—</span>'}</td>
+        <td>${t.lastRunD ? `${esc(fmtWhen(t.lastRunD))}<div><span class="res ${t.result.cls}"><span class="dot ${t.result.cls === 'none' ? 'off' : t.result.cls}"></span>${esc(t.result.text)}</span></div>` : '<span class="muted">未実行</span>'}</td>
+        <td class="cmd mono" title="${esc(t.actions.map(a => [a.command, a.args].filter(Boolean).join(' ')).join('\n'))}">${esc(t.actions.map(shortCmd).join(' / '))}</td>
+      </tr>${open ? `<tr class="detail"><td colspan="6">${detailHtml(t)}</td></tr>` : ''}`;
+    }).join('')}</tbody></table>`;
+}
+
+function openTask(path) {
+  const t = tasks.find(x => x.path === path);
+  if (t && !visible().includes(t)) { state.cats.add(cat(t)); if (t.disabled) state.showDisabled = true; }
+  state.open = path;
+  render();
+  const row = document.querySelector(`tr.row[data-path="${CSS.escape(path)}"]`);
+  if (row) row.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+$('#list').addEventListener('click', async e => {
+  const copy = e.target.closest('[data-copy]');
+  if (copy) {
+    const text = copy.dataset.copy;
+    try { await navigator.clipboard.writeText(text); }
+    catch { const ta = document.createElement('textarea'); ta.value = text; document.body.append(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
+    copy.textContent = 'コピーしました'; setTimeout(() => copy.textContent = 'コピー', 1400);
+    return;
+  }
+  const act = e.target.closest('[data-act]');
+  if (act) {
+    const { act: action, path } = act.dataset;
+    const label = { run: '実行', stop: '停止', enable: '有効化', disable: '無効化' }[action];
+    if ((action === 'stop' || action === 'disable') && !confirm(`「${path}」を${label}しますか？`)) return;
+    const msg = act.parentElement.querySelector('[data-act-msg]');
+    act.disabled = true; msg.textContent = `${label}中…`;
+    try {
+      const r = await fetch('/api/action', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Taskviz-Token': CONFIG.token },
+        body: JSON.stringify({ action, path }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || r.status);
+      msg.textContent = `${label}しました`;
+      setTimeout(reload, action === 'run' ? 1500 : 300);
+    } catch (err) {
+      act.disabled = false;
+      msg.textContent = `失敗: ${err.message}${/denied|拒否|0x80070005/i.test(err.message) ? '（管理者権限が必要なタスクです）' : ''}`;
+    }
+    return;
+  }
+  const mine = e.target.closest('[data-mine]');
+  if (mine) {
+    const t = tasks.find(x => x.path === mine.dataset.mine);
+    const want = cat(t) === 'mine' ? (t.autoCat === 'mine' ? 'app' : null) : 'mine';
+    if (want && want !== t.autoCat) state.overrides[t.path] = want; else delete state.overrides[t.path];
+    store.set('overrides', state.overrides);
+    render();
+    return;
+  }
+  const reset = e.target.closest('[data-reset]');
+  if (reset) { delete state.overrides[reset.dataset.reset]; store.set('overrides', state.overrides); render(); return; }
+  if (e.target.closest('tr.detail')) return;
+  const row = e.target.closest('tr.row');
+  if (row) { state.open = state.open === row.dataset.path ? null : row.dataset.path; render(); }
+});
+
+/* ---------- history note ---------- */
+function renderHistoryNote() {
+  const h = DATA.history || {};
+  const el = $('#historyNote');
+  if (!DATA.generatedAt) { el.hidden = true; return; }
+  if (h.enabled) { el.hidden = false; el.textContent = `実行履歴: 直近${h.days}日分を表示しています。`; return; }
+  el.hidden = false;
+  el.innerHTML = h.note
+    ? `実行履歴を読めませんでした（${esc(h.note)}）。`
+    : `Windows の「タスクの履歴」が無効なため、過去の実行は「前回」の1回分だけ表示しています。管理者のターミナルで <code>wevtutil sl Microsoft-Windows-TaskScheduler/Operational /e:true</code> を実行すると、以降の実行履歴もタイムラインに出ます。`;
+}
+
+/* ---------- main ---------- */
+function render() {
+  $('#showDisabled').checked = state.showDisabled;
+  renderHeader();
+  renderHistoryNote();
+  renderCats();
+  const list = visible();
+  renderAlerts(list);
+  renderTimeline(list);
+  renderList(list);
+}
+
+let loading = false;
+async function reload() {
+  if (!LIVE || loading) return;
+  loading = true; $('#refresh').disabled = true;
+  try {
+    const r = await fetch('/api/data', { cache: 'no-store' });
+    if (!r.ok) throw new Error(r.status);
+    setData(await r.json());
+    loadError = null;
+  } catch {
+    loadError = 'タスク一覧を取得できませんでした。taskviz のサーバーが止まっている可能性があります。taskviz.cmd を起動し直してください。';
+  }
+  loading = false; $('#refresh').disabled = false;
+  render();
+}
+$('#refresh').onclick = reload;
+$('#auto').checked = store.get('auto', true);
+$('#auto').onchange = e => store.set('auto', e.target.checked);
+$('#shutdown').onclick = async () => {
+  if (!confirm('taskviz のサーバーを停止しますか？（タスク自体には影響しません）')) return;
+  try { await fetch('/api/shutdown', { method: 'POST', headers: { 'X-Taskviz-Token': CONFIG.token } }); } catch { }
+  document.body.innerHTML = '<main><h1>taskviz を停止しました</h1><p class="muted">このタブは閉じて構いません。もう一度使うときは taskviz.cmd を起動してください。</p></main>';
+};
+
+if (CONFIG.mode === 'static') setData(DATA);
+render();
+reload();
+let rz;
+window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => renderTimeline(visible()), 150); });
+setInterval(() => {
+  if (LIVE && $('#auto').checked && document.visibilityState === 'visible') reload();
+  else { renderHeader(); renderTimeline(visible()); }
+}, MIN);
+</script>
+</body>
+</html>
