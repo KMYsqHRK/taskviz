@@ -19,7 +19,7 @@ jobs:
         shell: [powershell, pwsh]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # `shell` cannot take an expression, so each edition gets its own step
       - name: Smoke tests (Windows PowerShell 5.1)
         if: matrix.shell == 'powershell'
@@ -36,7 +36,7 @@ jobs:
   lint:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: PSScriptAnalyzer
         shell: powershell
         run: |
